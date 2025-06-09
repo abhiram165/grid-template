@@ -1,0 +1,314 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: load-generator-script
+data:
+  load_script.py: |
+    #!/usr/bin/env python3
+    """
+    Simplified Selenium Grid Load Generator for Kubernetes Deployment
+    """
+    
+    import time
+    import os
+    import random
+    import threading
+    import logging
+    import traceback
+    import sys
+    import requests
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.options import Options
+    from selenium.common.exceptions import WebDriverException, TimeoutException, NoSuchElementException
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logger = logging.getLogger("load-generator")
+    
+    # Configuration
+    HUB_URL = "http://selenium-grid.example.com:30080/wd/hub"
+    STATUS_URL = "http://selenium-grid.example.com:30080/status"
+    
+    # Test websites
+    SITES = [
+        "https://www.google.com",
+        "https://www.wikipedia.org",
+        "https://www.github.com"
+    ]
+    
+    # Session settings
+    MAX_CONCURRENT_SESSIONS = 2
+    SESSION_LIFETIME_SECONDS = 240  # 4 minutes
+    CONNECTION_TIMEOUT = 20
+    PAGE_LOAD_TIMEOUT = 15
+    
+    # Runtime state
+    active_sessions = []
+    active_sessions_lock = threading.Lock()
+    
+    def get_grid_status():
+        """Check Grid status and available nodes"""
+        try:
+            response = requests.get(STATUS_URL, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                ready = data.get('value', {}).get('ready', False)
+                nodes = data.get('value', {}).get('nodes', [])
+                
+                # Count available slots
+                available_slots = 0
+                for node in nodes:
+                    slots = node.get('slots', [])
+                    available_slots += sum(1 for slot in slots if slot.get('session') is None)
+                
+                return {
+                    'ready': ready,
+                    'node_count': len(nodes),
+                    'available_slots': available_slots
+                }
+            else:
+                logger.error(f"Failed to get grid status: {response.status_code}")
+                return None
+        except Exception as e:
+            logger.error(f"Error checking grid status: {e}")
+            return None
+    
+    def create_session():
+        """Create a Selenium browser session"""
+        try:
+            # Check grid status
+            grid_status = get_grid_status()
+            if not grid_status or not grid_status['ready']:
+                logger.warning("Grid not ready")
+                return None
+            
+            logger.info(f"Creating session (available slots: {grid_status.get('available_slots', 'unknown')})")
+            
+            # Configure Chrome options
+            chrome_options = Options()
+            
+            # Basic Chrome arguments
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            
+            # Set browser name to "chrome" to match the node
+            chrome_options.set_capability("browserName", "chrome")
+            chrome_options.set_capability("platformName", "linux")
+            
+            # Set shorter timeouts to prevent hangs
+            chrome_options.set_capability("timeouts", {
+                "implicit": 0,
+                "pageLoad": PAGE_LOAD_TIMEOUT * 1000,  # milliseconds
+                "script": 10000
+            })
+            
+            # Set up timeouts in the WebDriver
+            from selenium.webdriver.remote.remote_connection import RemoteConnection
+            RemoteConnection.set_timeout(CONNECTION_TIMEOUT)
+            
+            # Create the WebDriver
+            start_time = time.time()
+            
+            driver = webdriver.Remote(
+                command_executor=HUB_URL,
+                options=chrome_options
+            )
+            
+            creation_time = time.time() - start_time
+            logger.info(f"Session created successfully in {creation_time:.2f} seconds (ID: {driver.session_id})")
+            
+            # Set page load timeout
+            driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+            
+            return driver
+        except Exception as e:
+            logger.error(f"Error creating session: {e}")
+            logger.debug(traceback.format_exc())
+            return None
+    
+    def browse_sites(driver, max_actions=3):
+        """Perform browsing actions with the given driver"""
+        actions_completed = 0
+        start_time = time.time()
+        
+        try:
+            while actions_completed < max_actions and (time.time() - start_time) < SESSION_LIFETIME_SECONDS:
+                site = random.choice(SITES)
+                try:
+                    logger.info(f"Navigating to {site}")
+                    driver.get(site)
+                    
+                    # Find elements to interact with
+                    elements = driver.find_elements(By.TAG_NAME, "a")
+                    if elements:
+                        logger.info(f"Found {len(elements)} link elements")
+                    
+                    # Simple JavaScript execution to generate CPU load
+                    driver.execute_script("""
+                        let result = 0;
+                        for (let i = 0; i < 500000; i++) {
+                            result += Math.sqrt(i);
+                        }
+                        return result;
+                    """)
+                    
+                    actions_completed += 1
+                    time.sleep(random.uniform(1, 3))
+                except TimeoutException:
+                    logger.warning(f"Timeout loading {site}")
+                except Exception as e:
+                    logger.error(f"Error during browsing: {e}")
+                    break
+        except Exception as e:
+            logger.error(f"Error in browse_sites: {e}")
+        
+        return actions_completed
+    
+    def create_session_with_retry(max_retries=3):
+        """Create a browser session with retries"""
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"Attempt {attempt}/{max_retries} to create a session")
+                driver = create_session()
+                if driver:
+                    return driver
+                time.sleep(2 * attempt)
+            except Exception as e:
+                logger.warning(f"Session creation attempt {attempt} failed: {e}")
+                if attempt < max_retries:
+                    time.sleep(5)
+        
+        logger.error("All session creation attempts failed")
+        return None
+    
+    def session_manager():
+        """Manage browser sessions, creating new ones and retiring old ones"""
+        while True:
+            # Check if we need to create more sessions
+            current_count = len(active_sessions)
+            
+            if current_count < MAX_CONCURRENT_SESSIONS:
+                # Check if nodes are available
+                grid_status = get_grid_status()
+                if grid_status and grid_status['ready'] and grid_status.get('available_slots', 0) > 0:
+                    logger.info(f"Currently have {current_count} sessions, creating more...")
+                    
+                    # Create a new session
+                    new_session = create_session_with_retry()
+                    if new_session:
+                        logger.info("Session created successfully, adding to active sessions")
+                        with active_sessions_lock:
+                            active_sessions.append({
+                                "driver": new_session,
+                                "created_at": time.time()
+                            })
+                    else:
+                        logger.warning("Failed to create new session, waiting before retry")
+                        time.sleep(10)
+                else:
+                    logger.warning("No available slots or grid not ready")
+                    time.sleep(15)
+            
+            # Retire some old sessions
+            current_time = time.time()
+            with active_sessions_lock:
+                for session in list(active_sessions):
+                    if current_time - session["created_at"] > SESSION_LIFETIME_SECONDS:
+                        try:
+                            logger.info("Closing an old session")
+                            session["driver"].quit()
+                            active_sessions.remove(session)
+                            logger.info("Session closed successfully")
+                        except Exception as e:
+                            logger.error(f"Error closing session: {e}")
+                            active_sessions.remove(session)
+            
+            # Perform actions for each session
+            with active_sessions_lock:
+                for session in list(active_sessions):
+                    try:
+                        browse_sites(session["driver"], max_actions=1)
+                    except Exception as e:
+                        logger.error(f"Error during session browsing: {e}")
+            
+            # Sleep between cycles
+            time.sleep(5)
+    
+    def main():
+        logger.info("Starting load generator for Selenium Grid Chrome nodes")
+        logger.info(f"Connecting to Selenium Grid at {HUB_URL}")
+        
+        # Check Grid availability
+        try:
+            grid_status = get_grid_status()
+            if grid_status:
+                logger.info(f"Grid status: Ready={grid_status['ready']}, Nodes={grid_status['node_count']}")
+            else:
+                logger.warning("Could not check Grid status")
+        except Exception as e:
+            logger.error(f"Error checking Grid status: {e}")
+        
+        # Start session manager in a separate thread
+        logger.info("Starting session manager thread")
+        manager_thread = threading.Thread(target=session_manager)
+        manager_thread.daemon = True
+        manager_thread.start()
+        
+        # Keep the main thread alive
+        while True:
+            logger.info(f"Active sessions: {len(active_sessions)}")
+            time.sleep(30)
+    
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-generator
+  labels:
+    app: selenium-load-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: selenium-load-generator
+  template:
+    metadata:
+      labels:
+        app: selenium-load-generator
+    spec:
+      containers:
+      - name: load-generator
+        image: python:3.9-slim
+        command: 
+        - "/bin/bash"
+        - "-c"
+        - |
+          pip install selenium requests
+          echo "Starting Selenium Grid load generator"
+          python /scripts/load_script.py
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+        volumeMounts:
+        - name: script-volume
+          mountPath: /scripts
+      volumes:
+      - name: script-volume
+        configMap:
+          name: load-generator-script
+          defaultMode: 0777
+

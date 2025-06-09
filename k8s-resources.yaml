@@ -1,0 +1,376 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: load-generator-script
+data:
+  load_script.py: |
+    #!/usr/bin/env python3
+    import time
+    import os
+    import random
+    import threading
+    import logging
+    import traceback
+    import sys
+    import time
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    from selenium.common.exceptions import WebDriverException, TimeoutException
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logger = logging.getLogger("load-generator")
+
+    # Configuration
+    HUB_URL = "http://selenium-grid.example.com:30080/wd/hub"
+    MAX_SESSIONS = 2  # Reduced to match node capacity (1 session per node)
+    MAX_RETRY_COUNT = 5
+    BACKOFF_FACTOR = 1.5
+    SESSION_LIFETIME = 240  # 4 minutes (less than the 300s timeout)
+    CONNECTION_TIMEOUT = 20  # Shorter connection timeout in seconds
+    SITES = [
+        "https://www.google.com",
+        "https://www.youtube.com",
+        "https://www.wikipedia.org",
+        "https://www.amazon.com",
+        "https://www.reddit.com"
+    ]
+    
+    active_sessions = []
+    
+    def create_session_with_retry():
+        """Create a new browser session with retry logic and exponential backoff"""
+        retry_count = 0
+        wait_time = 1
+        
+        while retry_count < MAX_RETRY_COUNT:
+            try:
+                logger.info(f"Attempt {retry_count + 1}/{MAX_RETRY_COUNT} to create session")
+                driver = create_session()
+                if driver:
+                    return driver
+            except Exception as e:
+                logger.warning(f"Attempt {retry_count + 1} failed: {e}")
+                retry_count += 1
+                if retry_count < MAX_RETRY_COUNT:
+                    wait_time = wait_time * BACKOFF_FACTOR
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+        
+        logger.error("All retry attempts failed")
+        return None
+
+    def create_session():
+        """Create a new browser session and perform actions to generate load"""
+        try:
+            logger.info(f"Creating new session, connecting to {HUB_URL}")
+            
+            # Check Grid status before connecting
+            try:
+                import requests
+                logger.debug("Checking Grid status before creating session")
+                status_response = requests.get(HUB_URL.replace("/wd/hub", "/status"))
+                logger.debug(f"Grid status response: {status_response.status_code}")
+                if status_response.status_code == 200:
+                    status_json = status_response.json()
+                    if not status_json.get('value', {}).get('ready', False):
+                        logger.warning("Grid is not ready")
+                        return None
+                    logger.debug(f"Grid status: {status_response.text[:100]}...")
+            except Exception as status_error:
+                logger.warning(f"Failed to check Grid status: {status_error}")
+            
+            # Configure Chrome options using the exact capabilities from node logs
+            logger.debug("Configuring Chrome options to match node capabilities")
+            chrome_options = Options()
+            
+            # Set capabilities to match the actual node configuration
+            chrome_options.set_capability("browserName", "chrome")  # Using chrome instead of chrome-headless-shell
+            chrome_options.set_capability("acceptInsecureCerts", False)
+            chrome_options.set_capability("platformName", "linux")
+            chrome_options.set_capability("se:vncEnabled", True)
+            
+            # Set shorter timeouts to prevent long hangs
+            chrome_options.set_capability("timeouts", {
+                "implicit": 0,
+                "pageLoad": 15000,  # 15 seconds to load page
+                "script": 10000     # 10 seconds to run scripts
+            })
+            
+            # Basic Chrome arguments
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            
+            # Log the complete capabilities for debugging
+            capabilities = chrome_options.to_capabilities()
+            logger.debug(f"Full capabilities: {capabilities}")
+            logger.debug("Chrome options configured to match node capabilities")
+            
+            # Create a Remote WebDriver with the updated options
+            logger.debug("Creating WebDriver Remote connection...")
+            logger.debug(f"WebDriver command executor: {HUB_URL}")
+            
+            # Add connection timeout handling
+            from selenium.webdriver.remote.remote_connection import RemoteConnection
+            # Override default timeout settings for the RemoteConnection
+            RemoteConnection.set_timeout(CONNECTION_TIMEOUT)
+            logger.debug(f"Set connection timeout to {CONNECTION_TIMEOUT} seconds")
+            
+            driver = None
+            try:
+                # Start timer for connection attempt
+                start_time = time.time()
+                logger.debug("Starting connection attempt")
+                
+                # Attempt to create the driver with timeouts
+                driver = webdriver.Remote(
+                    command_executor=HUB_URL,
+                    options=chrome_options
+                )
+                
+                # Record time taken for successful connection
+                connection_time = time.time() - start_time
+                logger.info(f"WebDriver connection successful! Session created in {connection_time:.2f} seconds")
+                
+                # Log session ID for tracking
+                if driver:
+                    logger.info(f"Session ID: {driver.session_id}")
+            except WebDriverException as driver_error:
+                connection_time = time.time() - start_time
+                logger.error(f"WebDriver creation failed after {connection_time:.2f} seconds: {driver_error}")
+                logger.error(f"Exception type: {type(driver_error)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                raise
+            
+            # Perform random browsing actions - limit to fewer actions to stay within timeout
+            start_time = time.time()
+            action_count = 0
+            max_actions = 5  # Reduced from 10 to avoid timeouts
+            
+            # Make sure we don't exceed session lifetime
+            while action_count < max_actions and (time.time() - start_time) < SESSION_LIFETIME:
+                site = random.choice(SITES)
+                logger.info(f"Navigating to {site}")
+                try:
+                    # Set page load timeout to avoid hanging
+                    driver.set_page_load_timeout(15)  # Shorter timeout
+                    logger.debug(f"Loading {site}")
+                    
+                    # Track navigation time
+                    nav_start = time.time()
+                    driver.get(site)
+                    nav_time = time.time() - nav_start
+                    logger.debug(f"Page loaded in {nav_time:.2f} seconds")
+                    
+                    # Execute some JavaScript to increase CPU usage - reduced iterations
+                    logger.debug("Executing JavaScript")
+                    js_start = time.time()
+                    driver.execute_script("""
+                        let result = 0;
+                        for (let i = 0; i < 500000; i++) {  // Reduced iterations further
+                            result += Math.sqrt(i);
+                        }
+                        return result;
+                    """)
+                    js_time = time.time() - js_start
+                    logger.debug(f"JavaScript executed in {js_time:.2f} seconds")
+                    
+                    # Find elements and interact with them
+                    logger.debug("Finding elements")
+                    elements = driver.find_elements(By.TAG_NAME, "a")
+                    if elements:
+                        logger.info(f"Found {len(elements)} link elements")
+                        # Click on a random link occasionally (20% chance)
+                        if random.random() < 0.2 and len(elements) > 0:
+                            random_link = random.choice(elements)
+                            try:
+                                # Only click if the element is visible and enabled
+                                if random_link.is_displayed() and random_link.is_enabled():
+                                    logger.debug(f"Clicking on link: {random_link.text[:30] if random_link.text else 'unnamed link'}")
+                                    random_link.click()
+                                    logger.debug("Click successful")
+                            except Exception as click_error:
+                                logger.warning(f"Error clicking link: {click_error}")
+                    
+                    # Add some randomness to timing - shorter wait times
+                    wait_time = random.uniform(0.5, 1.0)
+                    logger.debug(f"Waiting {wait_time:.2f} seconds")
+                    time.sleep(wait_time)
+                    action_count += 1
+                except TimeoutException:
+                    logger.warning(f"Timeout loading {site}, moving to next action")
+                    continue
+                except Exception as action_error:
+                    logger.error(f"Error during browsing: {action_error}")
+                    break
+            
+            return driver
+        except Exception as e:
+            logger.error(f"Error creating session: {e}")
+            logger.error(f"Exception type: {type(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None
+    
+    def check_node_availability():
+        """Check if there are available nodes with free slots"""
+        try:
+            import requests
+            status_url = HUB_URL.replace("/wd/hub", "/status")
+            response = requests.get(status_url, timeout=5)
+            
+            if response.status_code == 200:
+                status_data = response.json()
+                nodes = status_data.get('value', {}).get('nodes', [])
+                
+                for node in nodes:
+                    slots = node.get('slots', [])
+                    # Count slots without sessions (available slots)
+                    available_slots = sum(1 for slot in slots if slot.get('session') is None)
+                    if available_slots > 0:
+                        logger.debug(f"Found node {node.get('id')} with {available_slots} available slots")
+                        return True
+                
+                logger.debug("No available slots found in any nodes")
+                return False
+            else:
+                logger.warning(f"Failed to get grid status: {response.status_code}")
+                return False
+        except Exception as e:
+            logger.error(f"Error checking node availability: {e}")
+            return False
+            
+    def session_manager():
+        """Manage browser sessions, creating new ones and retiring old ones"""
+        while True:
+            # Check if we need to create more sessions
+            current_count = len(active_sessions)
+            
+            if current_count < MAX_SESSIONS:
+                logger.info(f"Currently have {current_count} sessions, creating more...")
+                # Check if any node is available before attempting to create a session
+                node_available = check_node_availability()
+                if node_available:
+                    new_session = create_session_with_retry()
+                    if new_session:
+                        logger.info("Session created successfully, adding to active sessions")
+                        active_sessions.append({
+                            "driver": new_session,
+                            "created_at": time.time()
+                        })
+                    else:
+                        logger.warning("Failed to create new session, waiting before retry")
+                        # Add a cooldown period if session creation fails
+                        time.sleep(5)  # Shorter cooldown
+                else:
+                    logger.warning("No nodes available, waiting before retry")
+                    time.sleep(15)  # Longer wait when no nodes are available
+            
+            # Retire some old sessions
+            current_time = time.time()
+            for session in list(active_sessions):
+                # Close sessions older than 5 minutes
+                # Use our shorter session lifetime to avoid timeouts on the grid side
+                if current_time - session["created_at"] > SESSION_LIFETIME:
+                    try:
+                        logger.info("Closing an old session")
+                        session["driver"].quit()
+                        active_sessions.remove(session)
+                        logger.info("Session closed successfully")
+                    except Exception as close_error:
+                        logger.error(f"Error closing session: {close_error}")
+                        logger.error(f"Exception type: {type(close_error)}")
+                        logger.error(f"Traceback: {traceback.format_exc()}")
+                        active_sessions.remove(session)
+                        logger.info("Session removed from tracking despite error")
+            
+            # Dynamically adjust sleep time based on session count
+            if current_count >= MAX_SESSIONS:
+                # Maximum sessions reached, slow down significantly
+                time.sleep(15)
+            elif current_count >= MAX_SESSIONS / 2:
+                # Approaching max sessions, slow down moderately
+                time.sleep(7)
+            else:
+                # Few sessions, check more frequently
+                time.sleep(3)
+    
+    def main():
+        logger.info("Starting load generator for Selenium Grid Chrome nodes")
+        logger.info(f"Connecting to Selenium Grid at {HUB_URL}")
+        
+        # Check Grid availability
+        try:
+            import requests
+            status_url = HUB_URL.replace("/wd/hub", "/status")
+            logger.info(f"Checking Grid status at {status_url}")
+            response = requests.get(status_url)
+            logger.info(f"Grid status code: {response.status_code}")
+            logger.info(f"Grid response: {response.text[:200]}...")
+        except Exception as e:
+            logger.error(f"Error checking Grid status: {e}")
+        
+        # Start session manager in a separate thread
+        logger.info("Starting session manager thread")
+        manager_thread = threading.Thread(target=session_manager)
+        manager_thread.daemon = True
+        manager_thread.start()
+        
+        # Keep the main thread alive
+        while True:
+            logger.info(f"Active sessions: {len(active_sessions)}")
+            time.sleep(30)
+    
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-generator
+  labels:
+    app: selenium-load-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: selenium-load-generator
+  template:
+    metadata:
+      labels:
+        app: selenium-load-generator
+    spec:
+      containers:
+      - name: load-generator
+        image: python:3.9-slim
+        command: 
+        - "/bin/bash"
+        - "-c"
+        - |
+          pip install selenium requests
+          echo "Connecting to Selenium Grid at http://selenium-grid.example.com:30080/wd/hub"
+          python /scripts/load_script.py
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+        volumeMounts:
+        - name: script-volume
+          mountPath: /scripts
+      volumes:
+      - name: script-volume
+        configMap:
+          name: load-generator-script
+          defaultMode: 0777
+

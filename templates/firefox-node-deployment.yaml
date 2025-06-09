@@ -1,0 +1,29 @@
+## templates/firefox-node-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-firefox-node
+spec:
+  replicas: {{ .Values.firefoxNode.replicaCount }}
+  selector:
+    matchLabels:
+      app: firefox-node
+  template:
+    metadata:
+      labels:
+        app: firefox-node
+    spec:
+      containers:
+        - name: firefox-node
+          image: selenium/node-firefox:{{ .Values.firefoxNode.image.tag }}
+          env:
+            - name: SE_EVENT_BUS_HOST
+              value: {{ .Release.Name }}-hub
+            - name: SE_EVENT_BUS_PUBLISH_PORT
+              value: "4442"
+            - name: SE_EVENT_BUS_SUBSCRIBE_PORT
+              value: "4443"
+          ports:
+            - containerPort: 5555
+          resources:
+            {{- toYaml .Values.firefoxNode.resources | nindent 12 }}

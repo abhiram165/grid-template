@@ -1,0 +1,20 @@
+{{- if .Values.chromeNode.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-chrome-node
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Release.Name }}-chrome-node
+  minReplicas: {{ .Values.chromeNode.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.chromeNode.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.chromeNode.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

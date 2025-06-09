@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-chrome-node
+spec:
+  {{- if not .Values.chromeNode.autoscaling.enabled }}
+  replicas: {{ .Values.chromeNode.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: chrome-node
+  template:
+    metadata:
+      labels:
+        app: chrome-node
+    spec:
+      containers:
+        - name: chrome-node
+          image: selenium/node-chrome:{{ .Values.chromeNode.image.tag }}
+          env:
+            - name: SE_EVENT_BUS_HOST
+              value: "{{ .Release.Name }}-hub"
+            - name: SE_EVENT_BUS_PUBLISH_PORT
+              value: "4442"
+            - name: SE_EVENT_BUS_SUBSCRIBE_PORT
+              value: "4443"
+            - name: SE_NODE_MAX_SESSIONS
+              value: "1"
+            - name: SE_NODE_MAX_INSTANCES
+              value: "1"
+            - name: SE_NODE_OVERRIDE_MAX_SESSIONS
+              value: "true"
+            - name: SE_VNC_NO_PASSWORD
+              value: "1"
+          ports:
+            - containerPort: 5555
+          resources:
+            {{- toYaml .Values.chromeNode.resources | nindent 12 }}

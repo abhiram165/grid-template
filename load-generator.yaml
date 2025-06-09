@@ -1,0 +1,258 @@
+# Selenium Grid Load Generator Configuration
+
+# Basic configuration
+config:
+  name: "chrome-load-test"
+  description: "Load test for Chrome nodes in Selenium Grid"
+  baseUrl: "http://selenium-grid.example.com:30080" # Selenium Grid Hub URL
+  
+# Concurrency settings
+concurrency:
+  users: 50           # Number of concurrent users
+  rampUp: 60          # Ramp-up period in seconds
+  holdFor: 300        # Test duration in seconds after ramp-up
+  
+# Browser configuration
+browsers:
+  - browser: "chrome"
+    weight: 100       # Percentage allocation (100% Chrome in this case)
+    capabilities:
+      browserName: "chrome"
+      platformName: "ANY"
+      "goog:chromeOptions":
+        args:
+          - "--headless"
+          - "--disable-gpu"
+          - "--no-sandbox"
+          - "--disable-dev-shm-usage"
+          - "--disable-extensions"
+
+# Test scenarios
+scenarios:
+  - name: "basic-navigation"
+    weight: 40        # 40% of tests will use this scenario
+    actions:
+      - navigate: "https://www.google.com"
+      - wait: 2
+      - navigate: "https://www.github.com"
+      - wait: 3
+      - navigate: "https://www.stackoverflow.com"
+      - wait: 2
+      
+  - name: "search-interaction"
+    weight: 30        # 30% of tests will use this scenario
+    actions:
+      - navigate: "https://www.google.com"
+      - wait: 1
+      - sendKeys:
+          selector: "input[name='q']"
+          text: "Selenium Grid load testing"
+      - click:
+          selector: "input[name='btnK']"
+      - wait: 3
+      
+  - name: "multi-tab-workflow"
+    weight: 30        # 30% of tests will use this scenario
+    actions:
+      - navigate: "https://www.cnn.com"
+      - wait: 3
+      - executeScript: "window.open('https://www.bbc.com');"
+      - switchToWindow: 1
+      - wait: 3
+      - navigate: "https://www.bbc.com/news"
+      - wait: 2
+      - switchToWindow: 0
+      - navigate: "https://www.cnn.com/world"
+      - wait: 2
+
+# Reporting configuration
+reporting:
+  enabled: true
+  interval: 10        # Report interval in seconds
+  outputs:
+    - type: "console"
+    - type: "file"
+      filename: "load-test-report.json"
+      
+# Monitoring
+monitoring:
+  grid:
+    enabled: true
+    interval: 15      # Check grid status every 15 seconds
+    endpoints:
+      - "/status"     # Grid status endpoint
+      - "/grid/console" # Grid console endpoint
+
+# Error handling
+errorHandling:
+  stopOnFailure: false
+  retryCount: 2
+  screenshotOnFailure: true
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: load-generator-script
+data:
+  load_script.py: |
+    #!/usr/bin/env python3
+    import time
+    import os
+    import random
+    import threading
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.options import Options
+
+    # Configuration
+    HUB_URL = "http://selenium-grid.example.com:30080/wd/hub"
+    MAX_SESSIONS = 20
+    SITES = [
+        "https://www.google.com",
+        "https://www.youtube.com",
+        "https://www.wikipedia.org",
+        "https://www.amazon.com",
+        "https://www.reddit.com"
+    ]
+    
+    active_sessions = []
+    
+    def create_session():
+        """Create a new browser session and perform actions to generate load"""
+        try:
+            print(f"Creating new session, connecting to {HUB_URL}")
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            
+            # Set capabilities to properly target Chrome nodes
+            capabilities = {
+                "browserName": "chrome",
+                "platformName": "linux",
+                "goog:chromeOptions": {
+                    "args": ["--headless", "--no-sandbox", "--disable-dev-shm-usage"]
+                }
+            }
+            
+            driver = webdriver.Remote(
+                command_executor=HUB_URL,
+                desired_capabilities=capabilities
+            )
+            
+            # Perform random browsing actions
+            for _ in range(10):
+                site = random.choice(SITES)
+                print(f"Navigating to {site}")
+                driver.get(site)
+                
+                # Execute some JavaScript to increase CPU usage
+                driver.execute_script("""
+                    let result = 0;
+                    for (let i = 0; i < 10000000; i++) {
+                        result += Math.sqrt(i);
+                    }
+                    return result;
+                """)
+                
+                # Find elements and interact with them
+                elements = driver.find_elements(By.TAG_NAME, "a")
+                if elements:
+                    print(f"Found {len(elements)} link elements")
+                
+                # Add some randomness to timing
+                time.sleep(random.uniform(1, 3))
+            
+            return driver
+        except Exception as e:
+            print(f"Error creating session: {e}")
+            return None
+    
+    def session_manager():
+        """Manage browser sessions, creating new ones and retiring old ones"""
+        while True:
+            # Check if we need to create more sessions
+            current_count = len(active_sessions)
+            
+            if current_count < MAX_SESSIONS:
+                print(f"Currently have {current_count} sessions, creating more...")
+                new_session = create_session()
+                if new_session:
+                    active_sessions.append({
+                        "driver": new_session,
+                        "created_at": time.time()
+                    })
+            
+            # Retire some old sessions
+            current_time = time.time()
+            for session in list(active_sessions):
+                # Close sessions older than 5 minutes
+                if current_time - session["created_at"] > 300:
+                    try:
+                        print("Closing an old session")
+                        session["driver"].quit()
+                        active_sessions.remove(session)
+                    except:
+                        active_sessions.remove(session)
+            
+            time.sleep(5)
+    
+    def main():
+        print("Starting load generator for Selenium Grid Chrome nodes")
+        print(f"Connecting to Selenium Grid at {HUB_URL}")
+        
+        # Start session manager in a separate thread
+        manager_thread = threading.Thread(target=session_manager)
+        manager_thread.daemon = True
+        manager_thread.start()
+        
+        # Keep the main thread alive
+        while True:
+            print(f"Active sessions: {len(active_sessions)}")
+            time.sleep(30)
+    
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-generator
+  labels:
+    app: selenium-load-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: selenium-load-generator
+  template:
+    metadata:
+      labels:
+        app: selenium-load-generator
+    spec:
+      containers:
+      - name: load-generator
+        image: python:3.9-slim
+        command: 
+        - "/bin/bash"
+        - "-c"
+        - |
+          pip install selenium requests
+          echo "Connecting to Selenium Grid at http://selenium-grid.example.com:30080/wd/hub"
+          python /scripts/load_script.py
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+        volumeMounts:
+        - name: script-volume
+          mountPath: /scripts
+      volumes:
+      - name: script-volume
+        configMap:
+          name: load-generator-script
+          defaultMode: 0777
+

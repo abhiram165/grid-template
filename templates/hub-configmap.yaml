@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: selenium-grid-hub-config
+data:
+  config.toml: |
+    [server]
+    port = 4444
+    host = "0.0.0.0"
+
+    [logging]
+    log-level = "FINE"
+
+    [sessionqueue]
+    session-request-timeout = 300
+    session-retry-interval = 15
+
+    [healthcheck]
+    interval = 120
+
+    [relaxation]
+    relax-checks = true
+
+    [network]
+    bind-host = false
+
+    [capabilities]
+    reject-unsupported-caps = false
+
+    [tracing]
+    enabled = false

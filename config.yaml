@@ -1,0 +1,91 @@
+# Selenium Grid Load Generator Configuration
+
+# Basic configuration
+config:
+  name: "chrome-load-test"
+  description: "Load test for Chrome nodes in Selenium Grid"
+  baseUrl: "http://selenium-grid.example.com:30080" # Selenium Grid Hub URL
+  
+# Concurrency settings
+concurrency:
+  users: 50           # Number of concurrent users
+  rampUp: 60          # Ramp-up period in seconds
+  holdFor: 300        # Test duration in seconds after ramp-up
+  
+# Browser configuration
+browsers:
+  - browser: "chrome"
+    weight: 100       # Percentage allocation (100% Chrome in this case)
+    capabilities:
+      browserName: "chrome"
+      platformName: "ANY"
+      "goog:chromeOptions":
+        args:
+          - "--headless"
+          - "--disable-gpu"
+          - "--no-sandbox"
+          - "--disable-dev-shm-usage"
+          - "--disable-extensions"
+
+# Test scenarios
+scenarios:
+  - name: "basic-navigation"
+    weight: 40        # 40% of tests will use this scenario
+    actions:
+      - navigate: "https://www.google.com"
+      - wait: 2
+      - navigate: "https://www.github.com"
+      - wait: 3
+      - navigate: "https://www.stackoverflow.com"
+      - wait: 2
+      
+  - name: "search-interaction"
+    weight: 30        # 30% of tests will use this scenario
+    actions:
+      - navigate: "https://www.google.com"
+      - wait: 1
+      - sendKeys:
+          selector: "input[name='q']"
+          text: "Selenium Grid load testing"
+      - click:
+          selector: "input[name='btnK']"
+      - wait: 3
+      
+  - name: "multi-tab-workflow"
+    weight: 30        # 30% of tests will use this scenario
+    actions:
+      - navigate: "https://www.cnn.com"
+      - wait: 3
+      - executeScript: "window.open('https://www.bbc.com');"
+      - switchToWindow: 1
+      - wait: 3
+      - navigate: "https://www.bbc.com/news"
+      - wait: 2
+      - switchToWindow: 0
+      - navigate: "https://www.cnn.com/world"
+      - wait: 2
+
+# Reporting configuration
+reporting:
+  enabled: true
+  interval: 10        # Report interval in seconds
+  outputs:
+    - type: "console"
+    - type: "file"
+      filename: "load-test-report.json"
+      
+# Monitoring
+monitoring:
+  grid:
+    enabled: true
+    interval: 15      # Check grid status every 15 seconds
+    endpoints:
+      - "/status"     # Grid status endpoint
+      - "/grid/console" # Grid console endpoint
+
+# Error handling
+errorHandling:
+  stopOnFailure: false
+  retryCount: 2
+  screenshotOnFailure: true
+

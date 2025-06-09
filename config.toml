@@ -1,0 +1,19 @@
+[server]
+port = 4444
+host = "0.0.0.0"
+
+[logging]
+log-level = "FINE"
+
+[sessionqueue]
+session-request-timeout = 300
+session-retry-interval = 15
+
+[healthcheck]
+heartbeat-period = 120
+
+[serverOptions]
+relax-checks = true
+bind-host = false
+reject-unsupported-caps = false
+tracing = false

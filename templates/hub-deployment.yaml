@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-hub
+  labels:
+    app: selenium-hub
+    role: grid-hub
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "4444"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: selenium-hub
+  template:
+    metadata:
+      labels:
+        app: selenium-hub
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: "workload"
+          operator: "Equal"
+          value: "selenium"
+          effect: "NoSchedule"
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - selenium-hub
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+        - name: selenium-hub
+          image: selenium/hub:{{ .Values.hub.image.tag }}
+          ports:
+            - containerPort: 4442
+            - containerPort: 4443
+            - containerPort: 4444
+          command: ["java"]
+          args:
+            - "-jar"
+            - "/opt/selenium/selenium-server.jar"
+            - "hub"
+            - "--config"
+            - "/opt/selenium/config.toml"   
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 4444
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /readyz
+              port: 4444
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 5
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
+          resources:
+            {{- toYaml .Values.hub.resources | nindent 12 }}
+          volumeMounts:
+            - name: selenium-config
+              mountPath: /opt/selenium/config.toml
+              subPath: config.toml
+      volumes:
+        - name: selenium-config
+          configMap:
+            name: selenium-grid-hub-config

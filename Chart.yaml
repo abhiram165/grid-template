@@ -1,0 +1,6 @@
+apiVersion: v2
+name: selenium-grid
+description: A Helm chart for Selenium Grid with dynamic node support
+type: application
+version: 0.1.0
+appVersion: "4.21.0"

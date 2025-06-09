@@ -1,0 +1,51 @@
+hub:
+  image:
+    repository: selenium/hub
+    tag: "4.20.0"
+
+  env:
+    GRID_MAX_SESSION: "50"
+    GRID_SESSION_TIMEOUT: "300"
+
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+  ingress:
+    enabled: true
+    host: selenium-grid.example.com
+
+chromeNode:
+  image:
+    tag: "4.20.0"
+  replicaCount: 10  
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "1000Mi"
+    requests:
+      cpu: "300m"
+      memory: "768Mi"
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70    
+
+firefoxNode:
+  image:
+    tag: "latest"
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+
+service:
+  port: 4444

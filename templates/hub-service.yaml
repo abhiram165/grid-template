@@ -1,0 +1,20 @@
+## templates/hub-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-hub
+spec:
+  selector:
+    app: selenium-hub
+  ports:
+    - name: publish
+      port: 4442
+      targetPort: 4442
+    - name: subscribe
+      port: 4443
+      targetPort: 4443
+    - name: web
+      port: 4444
+      targetPort: 4444
+  type: ClusterIP
+

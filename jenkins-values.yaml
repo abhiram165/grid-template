@@ -1,0 +1,41 @@
+controller:
+  admin:
+    username: admin
+    password: admin123
+
+  controller:
+  ingress:
+    enabled: true
+    apiVersion: networking.k8s.io/v1
+    hostName: jenkins.local
+    paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: jenkins
+            port:
+              number: 8080
+    annotations:
+      nginx.ingress.kubernetes.io/rewrite-target: /
+
+  serviceType: ClusterIP
+
+  installPlugins:
+    - kubernetes
+    - workflow-aggregator
+    - git
+    - blueocean
+    - configuration-as-code
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+
+persistence:
+  enabled: false
+  size: 4Gi
