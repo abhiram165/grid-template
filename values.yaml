@@ -21,7 +21,7 @@ hub:
 chromeNode:
   image:
     tag: "4.20.0"
-  replicaCount: 10  
+  replicaCount: 2  
   resources:
     limits:
       cpu: "500m"
